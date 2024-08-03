@@ -39,3 +39,5 @@ end
 
 gem 'm'
 gem "localhost", require: false
+
+gem "red-black-tree", github: 'joshuay03/red-black-tree'
