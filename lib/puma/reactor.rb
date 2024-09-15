@@ -28,6 +28,7 @@ module Puma
       @selector = ::NIO::Selector.new(NIO::Selector.backends.delete(backend))
       @input = Queue.new
       @timeouts = []
+      @eager_candidates = []
       @block = block
     end
 
@@ -47,8 +48,13 @@ module Puma
     # The object must respond to #timeout and #timeout_at.
     # Returns false if the reactor is already shut down.
     def add(client)
-      @input << client
+      if client.to_eagerly_finish
+        @eager_candidates << client
+      else
+        @input << client
+      end
       @selector.wakeup
+
       true
     rescue ClosedQueueError, IOError # Ignore if selector is already closed
       false
@@ -69,7 +75,12 @@ module Puma
     def select_loop
       close_selector = true
       begin
-        until @input.closed? && @input.empty?
+        until @input.closed? && @input.empty? && @eager_candidates.empty?
+          until @eager_candidates.empty?
+            client = @eager_candidates.shift
+            add(client) unless @block.call(client)
+          end
+
           # Wakeup any registered object that receives incoming data.
           # Block until the earliest timeout or Selector#wakeup is called.
           timeout = (earliest = @timeouts.first) && earliest.timeout
