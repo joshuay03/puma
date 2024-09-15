@@ -26,6 +26,7 @@ module Puma
       end
 
       @selector = ::NIO::Selector.new(NIO::Selector.backends.delete(backend))
+      @eager = Queue.new
       @input = Queue.new
       @timeouts = []
       @block = block
@@ -47,8 +48,13 @@ module Puma
     # The object must respond to #timeout and #timeout_at.
     # Returns false if the reactor is already shut down.
     def add(client)
-      @input << client
+      if client.to_eagerly_finish
+        @eager << client
+      else
+        @input << client
+      end
       @selector.wakeup
+
       true
     rescue ClosedQueueError, IOError # Ignore if selector is already closed
       false
@@ -56,6 +62,7 @@ module Puma
 
     # Shutdown the reactor, blocking until the background thread is finished.
     def shutdown
+      @eager.close
       @input.close
       begin
         @selector.wakeup
@@ -69,7 +76,12 @@ module Puma
     def select_loop
       close_selector = true
       begin
-        until @input.closed? && @input.empty?
+        until @eager.closed? && @eager.empty? && @input.closed? && @input.empty?
+          until @eager.empty?
+            client = @eager.pop
+            add(client) unless @block.call(client)
+          end
+
           # Wakeup any registered object that receives incoming data.
           # Block until the earliest timeout or Selector#wakeup is called.
           timeout = (earliest = @timeouts.first) && earliest.timeout
@@ -79,13 +91,11 @@ module Puma
           timed_out = @timeouts.take_while {|t| t.timeout == 0}
           timed_out.each { |c| wakeup! c }
 
-          unless @input.empty?
-            until @input.empty?
-              client = @input.pop
-              register(client) if client.io_ok?
-            end
-            @timeouts.sort_by!(&:timeout_at)
+          until @input.empty?
+            client = @input.pop
+            register(client) if client.io_ok?
           end
+          @timeouts.sort_by!(&:timeout_at)
         end
       rescue StandardError => e
         STDERR.puts "Error in reactor loop escaped: #{e.message} (#{e.class})"

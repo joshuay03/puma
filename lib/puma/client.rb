@@ -115,7 +115,7 @@ module Puma
 
     attr_writer :peerip, :http_content_length_limit
 
-    attr_accessor :remote_addr_header, :listener
+    attr_accessor :remote_addr_header, :listener, :to_eagerly_finish
 
     # Remove in Puma 7?
     def closed?

@@ -303,8 +303,14 @@ module Puma
     # will wake up and again be checked to see if it's ready to be passed to the thread pool.
     def reactor_wakeup(client)
       shutdown = !@queue_requests
-      if client.try_to_finish || (shutdown && !client.can_close?)
+      if client.to_eagerly_finish
+        client.eagerly_finish.tap do |finished|
+          client.to_eagerly_finish = false
+          @thread_pool << client if finished
+        end
+      elsif client.try_to_finish || (shutdown && !client.can_close?)
         @thread_pool << client
+        true
       elsif shutdown || client.timeout == 0
         client.timeout!
       else
@@ -373,11 +379,20 @@ module Puma
                   next
                 end
                 drain += 1 if shutting_down?
-                pool << Client.new(io, @binder.env(sock)).tap { |c|
+
+                client = Client.new(io, @binder.env(sock)).tap { |c|
                   c.listener = sock
                   c.http_content_length_limit = @http_content_length_limit
                   c.send(addr_send_name, addr_value) if addr_value
                 }
+
+                if @queue_requests
+                  client.set_timeout(@first_data_timeout)
+                  client.to_eagerly_finish = true
+                  @reactor.add client
+                else
+                  pool << client
+                end
               end
             end
           rescue IOError, Errno::EBADF
@@ -453,16 +468,6 @@ module Puma
       requests = 0
 
       begin
-        if @queue_requests &&
-          !client.eagerly_finish
-
-          client.set_timeout(@first_data_timeout)
-          if @reactor.add client
-            close_socket = false
-            return false
-          end
-        end
-
         with_force_shutdown(client) do
           client.finish(@first_data_timeout)
         end
