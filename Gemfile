@@ -38,3 +38,5 @@ end
 
 gem 'm'
 gem "localhost", require: false
+
+gem "red-black-tree", "~> 0.1.2"
