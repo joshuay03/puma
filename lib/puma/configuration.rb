@@ -191,6 +191,8 @@ module Puma
       if block
         configure(&block)
       end
+
+      run_mode_hooks
     end
 
     attr_reader :options, :plugins
@@ -244,6 +246,8 @@ module Puma
 
     def load
       config_files.each { |config_file| @file_dsl._load_from(config_file) }
+
+      run_mode_hooks
 
       @options
     end
@@ -314,6 +318,17 @@ module Puma
       @plugins.create name
     end
 
+    def run_mode_hooks
+      workers_before = @options[:workers]
+      key = workers_before > 0 ? :cluster : :single
+
+      @options.all_of(key).each { |block| configure(&block) }
+
+      unless @options[:workers] == workers_before
+        raise ArgumentError, "cannot change the number of workers inside a #{key} hook"
+      end
+    end
+
     # @param key [:Symbol] hook to run
     # @param arg [Launcher, Int] `:on_restart` passes Launcher
     #
@@ -344,6 +359,12 @@ module Puma
 
       t = (Time.now.to_f * 1000).to_i
       "#{Dir.tmpdir}/puma-status-#{t}-#{$$}"
+    end
+
+    def self.random_token
+      require 'securerandom' unless defined?(SecureRandom)
+
+      SecureRandom.hex(16)
     end
 
     private
@@ -396,12 +417,6 @@ module Puma
       @options.file_options[:binds] = config_ru_binds unless config_ru_binds.empty?
 
       rack_app
-    end
-
-    def self.random_token
-      require 'securerandom' unless defined?(SecureRandom)
-
-      SecureRandom.hex(16)
     end
   end
 end
