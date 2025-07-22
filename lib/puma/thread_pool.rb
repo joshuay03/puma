@@ -1,8 +1,10 @@
 # frozen_string_literal: true
 
 require 'thread'
+require 'red-black-tree'
 
 require_relative 'io_buffer'
+require_relative 'client_node'
 
 module Puma
   # Internal Docs for A simple thread pool management object.
@@ -12,9 +14,9 @@ module Puma
   # First a connection to a client is made in `Puma::Server`. It is wrapped in a
   # `Puma::Client` instance and then passed to the `Puma::Reactor` to ensure
   # the whole request is buffered into memory. Once the request is ready, it is passed into
-  # a thread pool via the `Puma::ThreadPool#<<` operator where it is stored in a `@todo` array.
+  # a thread pool via the `Puma::ThreadPool#<<` operator where it is stored in a `@todo` tree.
   #
-  # Each thread in the pool has an internal loop where it pulls a request from the `@todo` array
+  # Each thread in the pool has an internal loop where it pulls a request from the `@todo` tree
   # and processes it.
   class ThreadPool
     class ForceShutdown < RuntimeError
@@ -36,7 +38,7 @@ module Puma
       @not_full = ConditionVariable.new
       @mutex = Mutex.new
 
-      @todo = []
+      @todo = ::RedBlackTree.new
 
       @spawned = 0
       @waiting = 0
@@ -156,7 +158,7 @@ module Puma
               end
             end
 
-            work = todo.shift
+            work = todo.shift.data
           end
 
           if @clean_thread_locals
@@ -231,14 +233,14 @@ module Puma
         @mutex.synchronize(&block)
     end
 
-    # Add +work+ to the todo list for a Thread to pickup and process.
+    # Add +work+ to the todo tree for a Thread to pickup and process.
     def <<(work)
       with_mutex do
         if @shutdown
           raise "Unable to add work while shutting down"
         end
 
-        @todo << work
+        @todo << Puma::ClientNode.new(work)
 
         if @waiting < @todo.size and @spawned < @max
           spawn_thread
@@ -267,9 +269,9 @@ module Puma
     # signaled, usually this indicates that a request has been processed.
     #
     # It's important to note that even though the server might accept another
-    # request, it might not be added to the `@todo` array right away.
+    # request, it might not be added to the `@todo` tree right away.
     # For example if a slow client has only sent a header, but not a body
-    # then the `@todo` array would stay the same size as the reactor works
+    # then the `@todo` tree would stay the same size as the reactor works
     # to try to buffer the request. In that scenario the next call to this
     # method would not block and another request would be added into the reactor
     # by the server. This would continue until a fully buffered request
